@@ -119,73 +119,80 @@ var updateDatabases = function(admin) {
   });
 };
 
-
-//Connect to mongodb database
-db.open(function(err, db) {
-  if (err) {
-    throw err;
-  }
-
-  console.log('Database connected!');
-
-  mainConn = db;
-
-  //Check if admin features are on
-  if (config.mongodb.admin === true) {
-    //get admin instance
-    db.admin(function(err, a) {
-      adminDb = a;
-
-      if (config.mongodb.adminUsername.length == 0) {
-        console.log('Admin Database connected');
-        updateDatabases(adminDb);
-      } else {
-        //auth details were supplied, authenticate admin account with them
-        adminDb.authenticate(config.mongodb.adminUsername, config.mongodb.adminPassword, function(err, result) {
-          if (err) {
-            //TODO: handle error
-            console.error(err);
-          }
-
-          console.log('Admin Database connected');
-          updateDatabases(adminDb);
-        });
-      }
-    });
-  } else {
-    //Regular user authentication
-    if (typeof config.mongodb.auth == "undefined" || config.mongodb.auth.length == 0) {
-      throw new Error('Add auth details to config or turn on admin!');
+var reconnect = function () {
+  connections = {};
+  databases = [];
+  collections = {};
+  db.close()
+  //Connect to mongodb database
+  db.open(function(err, db) {
+    if (err) {
+      throw err;
     }
 
-    async.forEachSeries(config.mongodb.auth, function(auth, callback) {
-      console.log("Connecting to " + auth.database + "...");
-      connections[auth.database] = mainConn.db(auth.database);
-      databases.push(auth.database);
+    console.log('Database connected!');
 
-      if (typeof auth.username != "undefined" && auth.username.length != 0) {
-        connections[auth.database].authenticate(auth.username, auth.password, function(err, success) {
-          if (err) {
-            //TODO: handle error
-            console.error(err);
-          }
+    mainConn = db;
 
-          if (!success) {
-            console.error('Could not authenticate to database "' + auth.database + '"');
-          }
+    //Check if admin features are on
+    if (config.mongodb.admin === true) {
+      //get admin instance
+      db.admin(function(err, a) {
+        adminDb = a;
 
+        if (config.mongodb.adminUsername.length == 0) {
+          console.log('Admin Database connected');
+          updateDatabases(adminDb);
+        } else {
+          //auth details were supplied, authenticate admin account with them
+          adminDb.authenticate(config.mongodb.adminUsername, config.mongodb.adminPassword, function(err, result) {
+            if (err) {
+              //TODO: handle error
+              console.error(err);
+            }
+
+            console.log('Admin Database connected');
+            updateDatabases(adminDb);
+          });
+        }
+      });
+    } else {
+      //Regular user authentication
+      if (typeof config.mongodb.auth == "undefined" || config.mongodb.auth.length == 0) {
+        throw new Error('Add auth details to config or turn on admin!');
+      }
+
+      async.forEachSeries(config.mongodb.auth, function(auth, callback) {
+        console.log("Connecting to " + auth.database + "...");
+        connections[auth.database] = mainConn.db(auth.database);
+        databases.push(auth.database);
+
+        if (typeof auth.username != "undefined" && auth.username.length != 0) {
+          connections[auth.database].authenticate(auth.username, auth.password, function(err, success) {
+            if (err) {
+              //TODO: handle error
+              console.error(err);
+            }
+
+            if (!success) {
+              console.error('Could not authenticate to database "' + auth.database + '"');
+            }
+
+            updateCollections(connections[auth.database], auth.database);
+            console.log('Connected!');
+            callback();
+          });
+        } else {
           updateCollections(connections[auth.database], auth.database);
           console.log('Connected!');
           callback();
-        });
-      } else {
-        updateCollections(connections[auth.database], auth.database);
-        console.log('Connected!');
-        callback();
-      }
-    });
-  }
-});
+        }
+      });
+    }
+  });
+};
+reconnect();
+
 
 //View helper, sets local variables used in templates
 app.all('*', function(req, res, next) {
@@ -289,7 +296,14 @@ var middleware = function(req, res, next) {
 };
 
 //Routes
-app.get(config.site.baseUrl, middleware,  routes.index);
+app.get(config.site.baseUrl, middleware, routes.index);
+
+app.get(config.site.baseUrl + 'reconnect', middleware, function (req, res) {
+  reconnect();
+  setTimeout(function () {
+    res.redirect('/');
+  }, 1000);
+});
 
 app.get(config.site.baseUrl+'db/:database/:collection/:document', middleware, routes.viewDocument);
 app.put(config.site.baseUrl+'db/:database/:collection/:document', middleware, routes.updateDocument);
